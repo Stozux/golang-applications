@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -13,6 +14,21 @@ import (
 	"sync"
 	"time"
 )
+
+func getFileName(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "output.dat"
+	}
+
+	fileName := path.Base(u.Path)
+
+	if ext := u.Query().Get("format"); ext != "" {
+		fileName = strings.TrimSuffix(fileName, path.Ext(fileName)) + "." + ext
+	}
+
+	return fileName
+}
 
 // Descobre o tamanho do arquivo
 func getFileSize(url string) (int64, error) {
@@ -136,7 +152,7 @@ func main() {
 	url, _ := reader.ReadString('\n')
 	url = strings.TrimSpace(url)
 
-	fmt.Print("ATENÇÃO: Um número muito grande de Threads pode acarretar em erros de requisição ou lentidão.\n")
+	fmt.Print("ATENÇÃO: Um número muito grande de Threads pode acarretar em erros de requisição ou lentidão, recomendamos por volta de 20.\n")
 	fmt.Print("> Digite a quantidade de threads/chunks: ")
 	var threads int64
 	fmt.Scanln(&threads)
@@ -162,7 +178,8 @@ func main() {
 	chunks := (fileSize + chunkSize - 1) / chunkSize
 	log.Printf("Dividindo em %d chunks, cada um até %d bytes\n", chunks, chunkSize)
 
-	outFile, err := os.Create(path.Base(url))
+	fileName := getFileName(url)
+	outFile, err := os.Create(fileName)
 	if err != nil {
 		log.Println("Erro criando arquivo final:", err)
 		return
