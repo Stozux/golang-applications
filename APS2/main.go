@@ -29,7 +29,6 @@ func getFileName(rawURL string) string {
 	return fileName
 }
 
-// Descobre o tamanho do arquivo
 func getFileSize(url string) (int64, error) {
 	resp, err := http.Head(url)
 	if err != nil {
@@ -54,32 +53,47 @@ func getFileSize(url string) (int64, error) {
 	return size, nil
 }
 
-// Limita o uso de rede
+// RateLimiter usando mutex
 type RateLimiter struct {
-	tokens chan struct{}
+	bytesPerSec int64
+	mu          sync.Mutex
+	tokens      int64
+	lastRefill  time.Time
 }
 
 func NewRateLimiter(bytesPerSec int64) *RateLimiter {
-	rl := &RateLimiter{tokens: make(chan struct{}, bytesPerSec)}
+	return &RateLimiter{
+		bytesPerSec: bytesPerSec,
+		tokens:      bytesPerSec,
+		lastRefill:  time.Now(),
+	}
+}
 
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			for i := int64(0); i < bytesPerSec; i++ {
-				select {
-				case rl.tokens <- struct{}{}:
-				default:
-				}
-			}
+func (rl *RateLimiter) refill() {
+	now := time.Now()
+	elapsed := now.Sub(rl.lastRefill).Seconds()
+
+	newTokens := int64(elapsed * float64(rl.bytesPerSec))
+	if newTokens > 0 {
+		rl.tokens += newTokens
+		if rl.tokens > rl.bytesPerSec {
+			rl.tokens = rl.bytesPerSec
 		}
-	}()
-	return rl
+		rl.lastRefill = now
+	}
 }
 
 func (rl *RateLimiter) Wait(n int) {
-	for i := 0; i < n; i++ {
-		<-rl.tokens
+	for {
+		rl.mu.Lock()
+		rl.refill()
+		if rl.tokens >= int64(n) {
+			rl.tokens -= int64(n)
+			rl.mu.Unlock()
+			break
+		}
+		rl.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -96,7 +110,6 @@ func (r *rateLimitedReader) Read(p []byte) (int, error) {
 	return r.r.Read(p)
 }
 
-// Baixa os chunks
 func downloadChunk(url string, start, end int64, file *os.File, wg *sync.WaitGroup, rl *RateLimiter) {
 	defer wg.Done()
 
@@ -175,7 +188,7 @@ func runDownload(url string, threads int64, limitMB int64) {
 		return
 	}
 
-	rl := NewRateLimiter(limitMB * 1024 * 1024)
+	rl := NewRateLimiter(limitMB * 1024 * 1024) // Convert MB/s para bytes/s
 
 	var wg sync.WaitGroup
 
@@ -196,7 +209,8 @@ func runDownload(url string, threads int64, limitMB int64) {
 
 func main() {
 	if len(os.Args) < 4 {
-		log.Fatalf("Uso: %s <url> <threads> <limiteMB>\n", os.Args[0])
+		fmt.Printf("Uso: %s <url> <threads> <limiteMB>\n", os.Args[0])
+		os.Exit(1)
 	}
 
 	url := os.Args[1]
@@ -211,18 +225,20 @@ func main() {
 		log.Fatalln("Limite de MB/s inválido:", os.Args[3])
 	}
 
+	var total time.Duration
 	const runs = 30
-	var totalDuration time.Duration
 
-	for i := 1; i <= runs; i++ {
+	for i := 0; i < runs; i++ {
 		start := time.Now()
+		log.Printf("Execução %d/%d\n", i+1, runs)
 		runDownload(url, threads, limitMB)
 		duration := time.Since(start)
+		log.Printf("Tempo execução %d: %s\n", i+1, duration)
+		total += duration
 
-		log.Printf("Execução %d levou %s\n", i, duration)
-		totalDuration += duration
+		// Remove o arquivo para próxima execução
+		os.Remove(getFileName(url))
 	}
 
-	average := totalDuration / runs
-	log.Printf("Tempo médio de execução em %d runs: %s\n", runs, average)
+	log.Printf("Tempo médio das %d execuções: %s\n", runs, total/time.Duration(runs))
 }
