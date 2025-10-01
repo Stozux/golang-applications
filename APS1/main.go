@@ -226,3 +226,5 @@ func main() {
 	average := totalDuration / runs
 	log.Printf("Tempo médio de execução em %d runs: %s\n", runs, average)
 }
+
+//a

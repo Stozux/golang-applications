@@ -242,3 +242,5 @@ func main() {
 
 	log.Printf("Tempo médio das %d execuções: %s\n", runs, total/time.Duration(runs))
 }
+
+//a
